@@ -23,12 +23,14 @@ class Parser
 
     // retrieves the next token from the lexer.expect()
     // tests whether the look-ahead is of the expected kind
+    // void advance() { llvm::errs() << "Consumed: " << Tok.getText() << "\n"; Lex.next(Tok); }
     void advance() { Lex.next(Tok); }
 
     bool expect(Token::TokenKind Kind)
     {
         if (Tok.getKind() != Kind)
         {
+            // llvm::errs() << "Got: " << Tok.getText() << ", " << Tok.getKind() << " Expect: " << Kind << "\n";
             error();
             return true;
         }
@@ -58,6 +60,8 @@ class Parser
     Expr *parseFactor();
     Expr *parseIfElse();
     Expr *parseLoop();
+    Expr *parsePrint();
+    void parseComment();
 
 public:
     // initializes all members and retrieves the first token

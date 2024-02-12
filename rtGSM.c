@@ -1,7 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-void gsm_write(int v)
+void print(int v)
+{
+    printf("%d\n", v);
+}
+
+void loop(int v)
 {
     printf("The result is: %d\n", v);
 }

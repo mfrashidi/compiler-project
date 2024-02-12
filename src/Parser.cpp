@@ -20,6 +20,16 @@ AST *Parser::parseGSM()
                 if (d)
                     exprs.push_back(d);
                 else
+                    break;
+                if (expect(Token::semicolon))
+                    error();
+                advance();
+                break;
+            case Token::KW_print:
+                d = parsePrint();
+                if (d)
+                    exprs.push_back(d);
+                else
                     error();
                 break;
             case Token::ident:
@@ -28,52 +38,37 @@ AST *Parser::parseGSM()
                 if (!Tok.is(Token::semicolon))
                 {
                     error();
-                    error();
                 }
                 if (a)
                     exprs.push_back(a);
                 else
                     error();
+                if (expect(Token::semicolon))
+                    error();
+                advance();
                 break;
             case Token::ifc:
-                // llvm::SmallVector<Expr *> exprs;
                 d = parseIfElse();
-
-                // if (!exprs.empty()){
-                //     for (Expr *a : exprs) {
-                //         exprs.push_back(a);
-                //     }
-                // } else error();
                 if (d){
                     exprs.push_back(d);
                 } else error();
                 break;
             case Token::loopc:
-                // llvm::SmallVector<Expr *> exprs;
-                // exprs = parseLoop();
-
-                // if (!exprs.empty()){
-                //     for (Expr * a : exprs) {
-                //         exprs.push_back(a);
-                //     }
-                // } else error();
-
                 d = parseLoop();
-
-                // if (!exprs.empty()){
-                //     for (Expr *a : exprs) {
-                //         exprs.push_back(a);
-                //     }
-                // } else error();
                 if (d){
                     exprs.push_back(d);
                 } else error();
+                break;
+            case Token::start_comment:
+                parseComment();
+                if (!Tok.is(Token::end_comment))
+                    error();
+                advance();
                 break;
             default:
                 error();
                 break;
         }
-        advance(); // TODO: watch this part
     }
     return new GSM(exprs);
 
@@ -134,13 +129,40 @@ Expr *Parser::parseDec()
         }
     }
 
-    if (expect(Token::semicolon) || count_exprs > count_vars) {
-        error();
+    if (!Tok.is(Token::semicolon)) {
+        error((const char *)";");
         goto _error;
     }
 
 
     return new Declaration(Vars, Exprs);
+_error: // TODO: Check this later in case of error :)
+    while (Tok.getKind() != Token::eoi)
+        advance();
+    
+    return nullptr;
+}
+
+Expr *Parser::parsePrint()
+{
+    Expr *E;
+
+    if (expect(Token::KW_print)) {
+        error();
+        goto _error;
+    }
+
+    advance();
+
+    E = parseExpr();
+
+    if (expect(Token::semicolon)) {
+        error();
+        goto _error;
+    }
+    advance();
+
+    return new Print(E);
 _error: // TODO: Check this later in case of error :)
     while (Tok.getKind() != Token::eoi)
         advance();
@@ -151,17 +173,29 @@ Assignment *Parser::parseAssign()
 {
     Expr *E;
     Factor *F;
+    Assignment::Type T;
     F = (Factor *)(parseFactor());
 
-    if (!Tok.is(Token::equal))
-    {
+    if (Tok.is(Token::equal)){
+        T = Assignment::Type::Equal;
+    } else if (Tok.is(Token::equal_minus)){
+        T = Assignment::Type::EqualMinus;
+    } else if (Tok.is(Token::equal_mod)){
+        T = Assignment::Type::EqualMod;
+    } else if (Tok.is(Token::equal_plus)){
+        T = Assignment::Type::EqualPlus;
+    } else if (Tok.is(Token::equal_slash)){
+        T = Assignment::Type::EqualSlash;
+    } else if (Tok.is(Token::equal_star)){
+        T = Assignment::Type::EqualStar;
+    } else {
         error();
         return nullptr;
     }
 
     advance();
     E = parseExpr();
-    return new Assignment(F, E);
+    return new Assignment(F, E, T);
 }
 
 Expr *Parser::parseExpr()
@@ -251,11 +285,8 @@ Expr *Parser::parseExpr6()
     Expr *Left = parseExpr7();
     while (Tok.isOneOf(Token::star, Token::slash, Token::module))
     {
-        BinaryOp::Operator Op;
-        if (Tok.is(Token::star)) BinaryOp::Operator Op = BinaryOp::Mul;
-        else if (Tok.is(Token::slash)) BinaryOp::Operator Op = BinaryOp::Div;
-        else BinaryOp::Operator Op = BinaryOp::Mod;
-
+        BinaryOp::Operator Op =
+            Tok.is(Token::star) ? BinaryOp::Mul : (Tok.is(Token::slash) ? BinaryOp::Div : BinaryOp::Mod);
         advance();
         Expr *Right = parseExpr7();
         Left = new BinaryOp(Op, Left, Right);
@@ -292,8 +323,10 @@ Expr *Parser::parseFactor()
     case Token::l_paren:
         advance();
         Res = parseExpr();
-        if (!consume(Token::r_paren))
+        if (!expect(Token::r_paren)) {
+            advance();
             break;
+        }
     default: // error handling
         if (!Res)
             error();
@@ -339,7 +372,7 @@ Expr *Parser::parseIfElse()
             if (A)
                 currentAssignments.push_back(A);
             else
-                error((const char *)"kossher");
+                error((const char *)"random");
         } else error((const char *)"ident");
     }
     assignments.push_back(currentAssignments);
@@ -471,10 +504,32 @@ Expr *Parser::parseLoop()
         }
 
     }
+
+    if (expect(Token::end)) {
+        error();
+        goto _error;
+    }
+    advance();
     
     return new Loop(Condition, assignments);
     _error: // TODO: Check this later in case of error :)
     while (Tok.getKind() != Token::eoi)
         advance();
     return nullptr;
+}
+
+void Parser::parseComment()
+{
+    if (expect(Token::start_comment)) {
+        error();
+        goto _error;
+    }
+    advance();
+
+    while (!Tok.isOneOf(Token::end_comment, Token::eoi)) advance();
+
+    return;
+    _error: // TODO: Check this later in case of error :)
+    while (Tok.getKind() != Token::eoi)
+        advance();
 }

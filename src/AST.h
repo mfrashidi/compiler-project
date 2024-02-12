@@ -14,6 +14,7 @@ class Assignment;
 class Declaration;
 class IfElse;
 class Loop;
+class Print;
 
 // ASTVisitor class defines a visitor pattern to traverse the AST
 class ASTVisitor
@@ -29,6 +30,7 @@ public:
   virtual void visit(Declaration &) = 0;     // Visit the variable declaration node
   virtual void visit(IfElse &) {}     // Visit the variable declaration node
   virtual void visit(Loop &) {}     // Visit the variable declaration node
+  virtual void visit(Print &) {}     // Visit the variable declaration node
 };
 
 // AST class serves as the base class for all AST nodes
@@ -142,16 +144,43 @@ public:
 // Assignment class represents an assignment expression in the AST
 class Assignment : public Expr
 {
+public:
+  enum Type
+  {
+    Equal,
+    EqualPlus,
+    EqualMinus,
+    EqualStar,
+    EqualSlash,
+    EqualMod
+  };
+
 private:
   Factor *Left;                             // Left-hand side factor (identifier)
   Expr *Right;                              // Right-hand side expression
+  Type type;                              // Right-hand side expression
 
 public:
-  Assignment(Factor *L, Expr *R) : Left(L), Right(R) {}
+
+  Assignment(Factor *L, Expr *R, Type T) : Left(L), Right(R), type(T) {}
 
   Factor *getLeft() { return Left; }
 
-  Expr *getRight() { return Right; }
+  Expr *getRight() { 
+    if (type == Type::Equal)
+      return Right;
+    else if (type == EqualPlus) 
+      return new BinaryOp(BinaryOp::Operator::Plus, Left, Right);
+    else if (type == EqualMinus) 
+      return new BinaryOp(BinaryOp::Operator::Minus, Left, Right);
+    else if (type == EqualMod) 
+      return new BinaryOp(BinaryOp::Operator::Mod, Left, Right);
+    else if (type == EqualSlash) 
+      return new BinaryOp(BinaryOp::Operator::Div, Left, Right);
+    else if (type == EqualStar) 
+      return new BinaryOp(BinaryOp::Operator::Mul, Left, Right);
+    return Right;
+  }
 
   virtual void accept(ASTVisitor &V) override
   {
@@ -221,6 +250,22 @@ public:
   Expr *getCondition() { return Condition; }
 
   llvm::SmallVector<Assignment *> getAssignments() { return assignments; }
+};
+
+class Print : public Expr
+{
+private:
+  Expr *E;
+
+public:
+  Print(Expr *e) : E(e) {}
+
+  virtual void accept(ASTVisitor &V) override
+  {
+    V.visit(*this);
+  }
+
+  Expr *getExpr() { return E; }
 };
 
 #endif

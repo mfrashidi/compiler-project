@@ -1,6 +1,6 @@
-# Compiler project (Spring 2023)
+# Compiler project (Fall 2023)
 
-A simple compiler project based on llvm. You can find the report [here](https://docs.google.com/document/d/1TWK8OBcipAsg7OCwES159OGB6n_YrkhiAePXsfZPveU/edit?usp=sharing)
+Final project of compiler course based on LLVM. You can find the report [here](https://docs.google.com/document/d/12rqSnLdv_H0jpD1G5L42B39vf5DCf5rOzRu4ujpFGP4/edit)
 
 ## How to run?
 ```
@@ -15,17 +15,49 @@ clang -o gsmbin gsm.o ../../rtGSM.c
 ```
 
 ## Sample inputs
+### Variable Declaration without Assignment
 ```
-type int a;
+int a;
 ```
-
+### Variable Declaration with Assignment
 ```
-type int a = 3 * 9;
+int a = 3;
 ```
-
+### Multiple Declaration
 ```
-type int a = 4;
-type int b = 4 * 9;
-type int c;
+int a, b = 4, 5;
+int c, d = 6;
 c = a * b;
+```
+### If-Elif-Else Condition
+```
+int a, b = 5, 3;
+if a > b: begin
+  a -= 1;
+end
+elif a < b: begin
+  a -= 2;
+end
+else: begin
+  a -= 3;
+end
+```
+### Loop
+```
+int a = 7;
+loopc a > 0: begin
+  a -= 1;
+end
+```
+### Multi-Line Comments
+```
+int a, b = 5 ^ 3;
+/* a *= 2; This line is commented out and doesn't affect the procedure
+b += 5 */
+a -= 1;
+```
+### Print
+```
+int a = 2 * 4;
+print a % 2;
 ```

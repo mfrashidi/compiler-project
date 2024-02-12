@@ -30,7 +30,7 @@ public:
         l_paren,
         r_paren,
         KW_int,
-        KW_type,
+        KW_print,
 
         double_equal,
         not_equal,
@@ -51,7 +51,10 @@ public:
         equal_minus,
         equal_star,
         equal_slash,
-        equal_mod
+        equal_mod,
+
+        start_comment,
+        end_comment
     };
 
 private:

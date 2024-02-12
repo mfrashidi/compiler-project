@@ -7,13 +7,17 @@ class InputCheck : public ASTVisitor {
   llvm::StringSet<> Scope; // StringSet to store declared variables
   bool HasError; // Flag to indicate if an error occurred
 
-  enum ErrorType { Twice, Not }; // Enum to represent error types: Twice - variable declared twice, Not - variable not declared
+  enum ErrorType { Twice, Not, TooMany }; // Enum to represent error types: Twice - variable declared twice, Not - variable not declared
 
   void error(ErrorType ET, llvm::StringRef V) {
     // Function to report errors
-    llvm::errs() << "Variable " << V << " is "
-                 << (ET == Twice ? "already" : "not")
-                 << " declared\n";
+    if (ET == Twice || ET == Not) {
+      llvm::errs() << "Variable " << V << " is "
+                  << (ET == Twice ? "already" : "not")
+                  << " declared\n";
+    } else if (ET == TooMany) {
+      llvm::errs() << "Too many values for declaration\n";
+    }
     HasError = true; // Set error flag to true
   }
 
@@ -88,12 +92,26 @@ public:
       Node.getRight()->accept(*this);
   };
 
+  virtual void visit(Print &Node) override {
+    Expr *e = Node.getExpr();
+
+    e->accept(*this);
+  };
+
   virtual void visit(Declaration &Node) override {
+    int number_of_variables = 0;
     for (auto I = Node.begin_vars(), E = Node.end_vars(); I != E;
          ++I) {
+      number_of_variables++;
       if (!Scope.insert(*I).second)
         error(Twice, *I); // If the insertion fails (element already exists in Scope), report a "Twice" error
     }
+    int number_of_exprs = 0;
+    for (auto I = Node.begin_exprs(), E = Node.end_exprs(); I != E;
+         ++I) {
+      number_of_exprs++;
+    }
+    if (number_of_exprs > number_of_variables) error(TooMany, *Node.begin_vars());
     // if (Node.getExpr()) TODO: What the fuck?
     //   Node.getExpr()->accept(*this); // If the Declaration node has an expression, recursively visit the expression node
   };

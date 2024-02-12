@@ -24,6 +24,11 @@ namespace
     Value *tmp2;
     StringMap<AllocaInst *> nameMap;
 
+    Function *MainFn;
+
+    FunctionType *CalcWriteFnTy;
+    Function *CalcWriteFn;
+
   public:
     // Constructor for the visitor class.
     ToIRVisitor(Module *M) : M(M), Builder(M->getContext())
@@ -34,6 +39,8 @@ namespace
       Int8PtrTy = Type::getInt8PtrTy(M->getContext());
       Int8PtrPtrTy = Int8PtrTy->getPointerTo();
       Int32Zero = ConstantInt::get(Int32Ty, 0, true);
+      CalcWriteFnTy = FunctionType::get(VoidTy, {Int32Ty}, false);
+      CalcWriteFn = Function::Create(CalcWriteFnTy, GlobalValue::ExternalLinkage, "print", M);
     }
 
     // Entry point for generating LLVM IR from the AST.
@@ -41,7 +48,7 @@ namespace
     {
       // Create the main function with the appropriate function type.
       FunctionType *MainFty = FunctionType::get(Int32Ty, {Int32Ty, Int8PtrPtrTy}, false);
-      Function *MainFn = Function::Create(MainFty, GlobalValue::ExternalLinkage, "main", M);
+      MainFn = Function::Create(MainFty, GlobalValue::ExternalLinkage, "main", M);
 
       // Create a basic block for the entry point of the main function.
       BasicBlock *BB = BasicBlock::Create(M->getContext(), "entry", MainFn);
@@ -64,6 +71,16 @@ namespace
       }
     };
 
+    virtual void visit(Print &Node) override
+    {
+      // Visit the right-hand side of the assignment and get its value.
+      Node.getExpr()->accept(*this);
+      Value *val = V;
+
+      // Create a call instruction to invoke the "print" function with the value.
+      CallInst *Call = Builder.CreateCall(CalcWriteFnTy, CalcWriteFn, {val});
+    };
+
     virtual void visit(Assignment &Node) override
     {
       // Visit the right-hand side of the assignment and get its value.
@@ -75,15 +92,6 @@ namespace
 
       // Create a store instruction to assign the value to the variable.
       Builder.CreateStore(val, nameMap[varName]);
-
-      // Create a function type for the "gsm_write" function.
-      FunctionType *CalcWriteFnTy = FunctionType::get(VoidTy, {Int32Ty}, false);
-
-      // Create a function declaration for the "gsm_write" function.
-      Function *CalcWriteFn = Function::Create(CalcWriteFnTy, GlobalValue::ExternalLinkage, "gsm_write", M);
-
-      // Create a call instruction to invoke the "gsm_write" function with the value.
-      CallInst *Call = Builder.CreateCall(CalcWriteFnTy, CalcWriteFn, {val});
     };
 
     virtual void visit(Factor &Node) override
@@ -128,14 +136,46 @@ namespace
         V = Builder.CreateSDiv(Left, Right);
         break;
       case BinaryOp::Mod: {
-        tmp1 = Builder.CreateSDiv(Left, Right);
-        tmp2 = Builder.CreateNSWMul(tmp1, Right);
-        V = Builder.CreateNSWSub(Left, tmp2);
+        V = Builder.CreateSRem(Left, Right);
         break;
       }
-      case BinaryOp::Power:
-        V = Builder.CreateNSWMul(Left, Right);
+      case BinaryOp::Power: {
+        llvm::Value* tmp = Builder.CreateNSWAdd(Builder.getInt32(0), Right);
+        llvm::AllocaInst* LocalVar = Builder.CreateAlloca(Int32Ty);
+        Builder.CreateStore(tmp, LocalVar);
+
+        tmp = Builder.CreateNSWAdd(Builder.getInt32(1), Builder.getInt32(0));
+        llvm::AllocaInst* LocalVar2 = Builder.CreateAlloca(Int32Ty);
+        Builder.CreateStore(tmp, LocalVar2);
+
+        llvm::BasicBlock* PowerCondBB = llvm::BasicBlock::Create(M->getContext(), "power.cond", MainFn);
+        llvm::BasicBlock* PowerBodyBB = llvm::BasicBlock::Create(M->getContext(), "power.body", MainFn);
+        llvm::BasicBlock* AfterPowerBB = llvm::BasicBlock::Create(M->getContext(), "after.power", MainFn);
+
+        Builder.CreateBr(PowerCondBB);
+        Builder.SetInsertPoint(PowerCondBB);
+
+        tmp = Builder.CreateLoad(LocalVar);
+        llvm::Value* condition = Builder.CreateICmpSGT(tmp, Builder.getInt32(0));
+        Builder.CreateCondBr(condition, PowerBodyBB, AfterPowerBB);
+
+        Builder.SetInsertPoint(PowerBodyBB);
+
+        tmp = Builder.CreateLoad(LocalVar2);
+        tmp = Builder.CreateNSWMul(tmp, Left);
+        Builder.CreateStore(tmp, LocalVar2);
+
+        tmp = Builder.CreateLoad(LocalVar);
+        tmp = Builder.CreateNSWSub(tmp, Builder.getInt32(1));
+        Builder.CreateStore(tmp, LocalVar);
+
+        Builder.CreateBr(PowerCondBB);
+        Builder.SetInsertPoint(AfterPowerBB);
+
+        V = Builder.CreateLoad(LocalVar2);
+
         break;
+      }
       case BinaryOp::Or:
         V = Builder.CreateOr(Left, Right);
         break;
@@ -184,7 +224,7 @@ namespace
           Ie++;
         } else if (Ie == Ee || finishedExprs) {
           finishedExprs = true;
-          val = Builder.getInt1(0);
+          val = ConstantInt::get(Int32Ty, 0, true);
         }
       
         // Create an alloca instruction to allocate memory for the variable.
@@ -202,147 +242,94 @@ namespace
     };
 
     virtual void visit(IfElse &Node) override {
-        llvm::errs() << "here1 \n";
-        llvm::SmallVector<Expr *> conditions = Node.getConditions();
-        llvm::SmallVector<llvm::SmallVector<Assignment *>> assignments = Node.getAssignments();
-        int count_conditions = 0;
-        int count_exprs = 0;
-        llvm::errs() << "here2 \n";
+      llvm::SmallVector<Expr *> conditions = Node.getConditions();
+      llvm::SmallVector<llvm::SmallVector<Assignment *>> assignments_of_assignments = Node.getAssignments();
+      llvm::BasicBlock* ifCondBB;
+      llvm::BasicBlock* ifBodyBB;
+      llvm::BasicBlock* AfterifBB;
+      llvm::BasicBlock* elseBodyBB;
+      llvm::BasicBlock* AferAllBB = llvm::BasicBlock::Create(M->getContext(), "afterAll", MainFn);
 
+      int count_conditions = 0;
+      int count_assignments = 0;
+      for (auto I = assignments_of_assignments.begin(), E = assignments_of_assignments.end(); I != E; ++I) count_assignments++;
+      for (auto I = conditions.begin(), E = conditions.end(); I != E; ++I) count_conditions++;
 
-        for (auto I = assignments.begin(), E = assignments.end(); I != E; ++I) count_exprs++;
-        for (auto I = conditions.begin(), E = conditions.end(); I != E; ++I) count_conditions++;
-        llvm::errs() << "here3 \n";
+      auto condition = conditions.begin();
+      auto condition_end = conditions.end();
+      bool reached_else = false;
+      bool first = true;
 
+      int i = 0;
+      int j = 0;
 
-        if (count_exprs == count_conditions) {
-          llvm::errs() << "here4 \n";
+      bool end_of_statements = false;
 
-          int correct_index = -1;
-          count_conditions = 0;
-          for (auto I = conditions.begin(), E = conditions.end(); I != E; ++I) {
-            llvm::errs() << "here44 \n";
-            Factor* f = (Factor *) I;
-            int condition_val;
-            f -> getVal().getAsInteger(10, condition_val);
-            if (condition_val != 0) {
-              correct_index = count_conditions;
-              break;
-            }
-            llvm::errs() << "here45 \n";
-            count_conditions++;
-          }
-          llvm::errs() << "here5 \n";
+      for (auto I = assignments_of_assignments.begin(), E = assignments_of_assignments.end(); I != E; ++I){
+        i++;
+        end_of_statements = count_assignments == count_conditions && count_assignments == i;
+        if (condition == condition_end) reached_else = true;
+        else j++;
 
-          if (correct_index == -1) return;
-
-          count_exprs = 0;
-          for (auto I = assignments.begin(), E = assignments.end(); I != E; ++I) {
-            if (count_exprs == correct_index) {
-              llvm::errs() << "here6 \n";
-
-              for (auto II = I -> begin(), EE = E -> end(); II != EE; ++II) {
-                (*II) -> getRight()->accept(*this);
-                Value *val = V;
-
-                auto varName = (*II)->getLeft()->getVal();
-
-                // Create a store instruction to assign the value to the variable.
-                Builder.CreateStore(val, nameMap[varName]);
-
-                // Create a function type for the "gsm_write" function.
-                FunctionType *CalcWriteFnTy = FunctionType::get(VoidTy, {Int32Ty}, false);
-
-                // Create a function declaration for the "gsm_write" function.
-                Function *CalcWriteFn = Function::Create(CalcWriteFnTy, GlobalValue::ExternalLinkage, "gsm_write", M);
-
-                // Create a call instruction to invoke the "gsm_write" function with the value.
-                CallInst *Call = Builder.CreateCall(CalcWriteFnTy, CalcWriteFn, {val});
-                llvm::errs() << "here7 \n";
-
-              }
-              return;
-            }
-            count_exprs++;
-          }
-        } else if (count_conditions + 1 == count_exprs) {
-          int correct_index = -1;
-          count_conditions = 0;
-          for (auto I = conditions.begin(), E = conditions.end(); I != E; ++I) {
-            Factor* f = (Factor *) I;
-            int condition_val;
-            f -> getVal().getAsInteger(10, condition_val);
-            if (condition_val != 0) {
-              correct_index = count_conditions;
-              break;
-            }
-            count_conditions++;
-          }
-          if (correct_index == -1) {
-            correct_index = count_exprs;
-          }
-
-          count_exprs = 0;
-          for (auto I = assignments.begin(), E = assignments.end(); I != E; ++I) {
-            if (count_exprs == correct_index) {
-              for (auto II = I -> begin(), EE = E -> end(); II != EE; ++II) {
-                (*II) -> getRight()->accept(*this);
-                Value *val = V;
-
-                auto varName = (*II)->getLeft()->getVal();
-
-                // Create a store instruction to assign the value to the variable.
-                Builder.CreateStore(val, nameMap[varName]);
-
-                // Create a function type for the "gsm_write" function.
-                FunctionType *CalcWriteFnTy = FunctionType::get(VoidTy, {Int32Ty}, false);
-
-                // Create a function declaration for the "gsm_write" function.
-                Function *CalcWriteFn = Function::Create(CalcWriteFnTy, GlobalValue::ExternalLinkage, "gsm_write", M);
-
-                // Create a call instruction to invoke the "gsm_write" function with the value.
-                CallInst *Call = Builder.CreateCall(CalcWriteFnTy, CalcWriteFn, {val});
-              }
-              return;
-            }
-            count_exprs++;
-          }
-
+        if (first) {
+          ifCondBB = llvm::BasicBlock::Create(M->getContext(), "ifc.cond", MainFn);
+          ifBodyBB = llvm::BasicBlock::Create(M->getContext(), "ifc.body", MainFn);
+          if (!end_of_statements)
+            AfterifBB = llvm::BasicBlock::Create(M->getContext(), "after.ifc", MainFn);
+          first = false;
         } else {
-          //TODO: Should raise error
+          if (!reached_else) {
+            ifCondBB = llvm::BasicBlock::Create(M->getContext(), "elifc.cond", MainFn);
+            ifBodyBB = llvm::BasicBlock::Create(M->getContext(), "elifc.body", MainFn);
+            if (!end_of_statements)
+              AfterifBB = llvm::BasicBlock::Create(M->getContext(), "after.elifc", MainFn);
+          }
         }
+
+        if (!reached_else) {
+          Builder.CreateBr(ifCondBB);
+          Builder.SetInsertPoint(ifCondBB);
+
+          (*condition)->accept(*this);
+          Value* val=V;
+          if (end_of_statements) Builder.CreateCondBr(val, ifBodyBB, AferAllBB);
+          else Builder.CreateCondBr(val, ifBodyBB, AfterifBB);
+          Builder.SetInsertPoint(ifBodyBB);
+        } else {
+          elseBodyBB = llvm::BasicBlock::Create(M->getContext(), "elsec.body", MainFn);
+          Builder.CreateBr(elseBodyBB);
+          Builder.SetInsertPoint(elseBodyBB);
+        }
+
+        for (auto II = I -> begin(), EE =  I -> end(); II != EE; ++II){
+          (*II)->accept(*this);
+        }
+        Builder.CreateBr(AferAllBB);
+        if (!reached_else && !end_of_statements)
+          Builder.SetInsertPoint(AfterifBB);
+        
+        condition++;
+      }
+      Builder.SetInsertPoint(AferAllBB);
     };
 
   virtual void visit(Loop &Node) override {
-        llvm::SmallVector<Assignment *> assignments = Node.getAssignments();
+      llvm::BasicBlock* WhileCondBB = llvm::BasicBlock::Create(M->getContext(), "loopc.cond", MainFn);
+      llvm::BasicBlock* WhileBodyBB = llvm::BasicBlock::Create(M->getContext(), "loopc.body", MainFn);
+      llvm::BasicBlock* AfterWhileBB = llvm::BasicBlock::Create(M->getContext(), "after.loopc", MainFn);
 
-        Factor* f = (Factor *) Node.getCondition();
-        int condition_val;
-        f -> getVal().getAsInteger(10, condition_val);
-        while (condition_val != 0) {
-          for (auto I = assignments.begin(), E = assignments.end(); I != E; ++I) {
-            (*I) -> getRight()->accept(*this);
-            Value *val = V;
-
-            auto varName = (*I) -> getLeft()->getVal();
-
-            // Create a store instruction to assign the value to the variable.
-            Builder.CreateStore(val, nameMap[varName]);
-
-            // Create a function type for the "gsm_write" function.
-            FunctionType *CalcWriteFnTy = FunctionType::get(VoidTy, {Int32Ty}, false);
-
-            // Create a function declaration for the "gsm_write" function.
-            Function *CalcWriteFn = Function::Create(CalcWriteFnTy, GlobalValue::ExternalLinkage, "gsm_write", M);
-
-            // Create a call instruction to invoke the "gsm_write" function with the value.
-            CallInst *Call = Builder.CreateCall(CalcWriteFnTy, CalcWriteFn, {val});
-
-            f = (Factor *) Node.getCondition();
-            int condition_val;
-            f -> getVal().getAsInteger(10, condition_val);
-        }
-    };
+      Builder.CreateBr(WhileCondBB);
+      Builder.SetInsertPoint(WhileCondBB);
+      Node.getCondition()->accept(*this);
+      Value* val=V;
+      Builder.CreateCondBr(val, WhileBodyBB, AfterWhileBB);
+      Builder.SetInsertPoint(WhileBodyBB);
+      llvm::SmallVector<Assignment* > assignments = Node.getAssignments();
+      for (auto I = assignments.begin(), E = assignments.end(); I != E; ++I){
+        (*I)->accept(*this);
+      }
+      Builder.CreateBr(WhileCondBB);
+      Builder.SetInsertPoint(AfterWhileBB);
   };
 };
 }; // namespace
